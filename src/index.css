@@ -1,1 +1,109 @@
 @import "tailwindcss";
+
+/* CRT Monitor Effect */
+@keyframes flicker {
+  0% { opacity: 0.97; }
+  50% { opacity: 1; }
+  100% { opacity: 0.98; }
+}
+
+@keyframes scanline {
+  0% { transform: translateY(-100%); }
+  100% { transform: translateY(100vh); }
+}
+
+body {
+  background: #0a0a0a;
+  overflow-x: hidden;
+}
+
+/* CRT screen glow */
+canvas {
+  image-rendering: pixelated;
+  box-shadow: 
+    0 0 10px rgba(0, 255, 0, 0.1),
+    inset 0 0 30px rgba(0, 255, 0, 0.05);
+  animation: flicker 0.1s infinite alternate;
+}
+
+/* Custom scrollbar */
+::-webkit-scrollbar {
+  width: 6px;
+}
+
+::-webkit-scrollbar-track {
+  background: #0a1a0a;
+}
+
+::-webkit-scrollbar-thumb {
+  background: #1a3a1a;
+  border-radius: 3px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: #2a5a2a;
+}
+
+/* Range input styling */
+input[type="range"] {
+  -webkit-appearance: none;
+  appearance: none;
+  height: 4px;
+  background: #1a3a1a;
+  border-radius: 2px;
+  outline: none;
+}
+
+input[type="range"]::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  background: #00ff66;
+  cursor: pointer;
+  border: 2px solid #003a00;
+}
+
+input[type="range"]::-moz-range-thumb {
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  background: #00ff66;
+  cursor: pointer;
+  border: 2px solid #003a00;
+}
+
+/* Number input styling */
+input[type="number"] {
+  -moz-appearance: textfield;
+}
+
+input[type="number"]::-webkit-outer-spin-button,
+input[type="number"]::-webkit-inner-spin-button {
+  -webkit-appearance: none;
+  margin: 0;
+}
+
+/* Fire button pulse */
+button.bg-red-900:not(:disabled) {
+  animation: pulse-red 2s infinite;
+}
+
+@keyframes pulse-red {
+  0%, 100% { box-shadow: 0 0 5px rgba(220, 38, 38, 0.3); }
+  50% { box-shadow: 0 0 20px rgba(220, 38, 38, 0.6); }
+}
+
+/* Glow text effect */
+.text-green-300 {
+  text-shadow: 0 0 5px rgba(134, 239, 172, 0.3);
+}
+
+.text-yellow-400 {
+  text-shadow: 0 0 5px rgba(250, 204, 21, 0.3);
+}
+
+.text-red-400 {
+  text-shadow: 0 0 5px rgba(248, 113, 113, 0.3);
+}
