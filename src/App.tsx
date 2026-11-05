@@ -12,39 +12,100 @@ interface FireSolution {
   flightTime: number;
 }
 
-// Баллистические константы (стилизованные под MTC)
-const GRAVITY = 196.2; // studs/s² (Roblox gravity)
-const MUZZLE_VELOCITY = 300; // studs/s
-const GUN_POSITION_DEFAULT: Point = { x: 500, y: 500 };
-const MAP_SIZE = 1000; // studs
-const GRID_SIZE = 100; // studs per grid cell
+interface ShellType {
+  id: string;
+  name: string;
+  type: 'HE' | 'AP' | 'HEAT' | 'SMOKE';
+  damage: number;
+  splash: number;
+  velocity: number;
+  effectiveRange: number;
+  description: string;
+}
 
-function calculateFireSolution(gunPos: Point, targetPos: Point): FireSolution {
+interface AIRecommendation {
+  shellType: ShellType;
+  confidence: number;
+  reason: string;
+  terrainAnalysis: string;
+  effectiveness: number;
+}
+
+interface TargetData {
+  position: Point;
+  type?: string;
+  armor?: number;
+  priority?: 'high' | 'medium' | 'low';
+}
+
+// Баллистические константы
+const GRAVITY = 196.2;
+const MAP_SIZE = 1000;
+const GRID_SIZE = 100;
+
+// Типы снарядов
+const SHELL_TYPES: ShellType[] = [
+  {
+    id: 'he',
+    name: 'ОФ-540',
+    type: 'HE',
+    damage: 150,
+    splash: 25,
+    velocity: 300,
+    effectiveRange: 600,
+    description: 'Осколочно-фугасный. Эффективен против пехоты и лёгкой техники.'
+  },
+  {
+    id: 'ap',
+    name: 'Бр-540',
+    type: 'AP',
+    damage: 200,
+    splash: 5,
+    velocity: 350,
+    effectiveRange: 500,
+    description: 'Бронебойный. Пробивает тяжёлую броню.'
+  },
+  {
+    id: 'heat',
+    name: 'Кум-540',
+    type: 'HEAT',
+    damage: 250,
+    splash: 10,
+    velocity: 280,
+    effectiveRange: 450,
+    description: 'Кумулятивный. Высокое пробитие на любой дистанции.'
+  },
+  {
+    id: 'smoke',
+    name: 'Дым-540',
+    type: 'SMOKE',
+    damage: 0,
+    splash: 40,
+    velocity: 250,
+    effectiveRange: 550,
+    description: 'Дымовой. Создаёт дымовую завесу.'
+  }
+];
+
+function calculateFireSolution(gunPos: Point, targetPos: Point, shellType: ShellType): FireSolution {
   const dx = targetPos.x - gunPos.x;
   const dy = targetPos.y - gunPos.y;
   const distance = Math.sqrt(dx * dx + dy * dy);
   
-  // Азимут (0° = север, по часовой стрелке)
   let azimuth = Math.atan2(dx, -dy) * (180 / Math.PI);
   if (azimuth < 0) azimuth += 360;
   
-  // Угол возвышения (упрощённая баллистика)
-  // θ = arcsin(v² ± sqrt(v⁴ - g(gv² + 2d²... )) / gd)
-  // Упрощённо: используем малый угол для дальних дистанций
-  const v2 = MUZZLE_VELOCITY * MUZZLE_VELOCITY;
+  const v2 = shellType.velocity * shellType.velocity;
   const discriminant = v2 * v2 - GRAVITY * (GRAVITY * distance * distance);
   
   let elevation: number;
   if (discriminant < 0 || distance > v2 / GRAVITY) {
-    // Цель вне досягаемости
-    elevation = 45; // Максимальный угол
+    elevation = 45;
   } else {
-    // Настильная траектория (малый угол)
     elevation = 0.5 * Math.asin(GRAVITY * distance / v2) * (180 / Math.PI);
   }
   
-  // Время полёта
-  const flightTime = distance / (MUZZLE_VELOCITY * Math.cos(elevation * Math.PI / 180));
+  const flightTime = distance / (shellType.velocity * Math.cos(elevation * Math.PI / 180));
   
   return { azimuth, elevation, distance, flightTime };
 }
@@ -60,29 +121,148 @@ function formatAngle(angle: number): string {
   return `${deg}° ${min}' ${sec}"`;
 }
 
+// ИИ-анализ
+function analyzeTarget(target: TargetData, gunPos: Point, terrain: string): AIRecommendation {
+  const distance = Math.sqrt(
+    Math.pow(target.position.x - gunPos.x, 2) + 
+    Math.pow(target.position.y - gunPos.y, 2)
+  );
+  
+  let selectedShell: ShellType;
+  let confidence: number;
+  let reason: string;
+  let effectiveness: number;
+  
+  // Анализ типа цели
+  if (target.type === 'tank' || (target.armor && target.armor > 100)) {
+    if (distance < 400) {
+      selectedShell = SHELL_TYPES[1]; // AP
+      confidence = 95;
+      reason = 'Тяжёлая броня на ближней дистанции — бронебойный оптимально';
+      effectiveness = 98;
+    } else {
+      selectedShell = SHELL_TYPES[2]; // HEAT
+      confidence = 88;
+      reason = 'Тяжёлая броня на средней дистанции — кумулятивный эффективнее';
+      effectiveness = 85;
+    }
+  } else if (target.type === 'infantry' || (target.armor && target.armor < 50)) {
+    selectedShell = SHELL_TYPES[0]; // HE
+    confidence = 92;
+    reason = 'Пехота/лёгкая техника — осколочно-фугасный с большим радиусом поражения';
+    effectiveness = 95;
+  } else if (target.type === 'building') {
+    selectedShell = SHELL_TYPES[0]; // HE
+    confidence = 90;
+    reason = 'Здания разрушаются ОФ-снарядами';
+    effectiveness = 90;
+  } else {
+    // Неизвестная цель — универсальный выбор
+    selectedShell = SHELL_TYPES[0]; // HE
+    confidence = 75;
+    reason = 'Неизвестный тип цели — рекомендуется универсальный ОФ';
+    effectiveness = 80;
+  }
+  
+  // Анализ дистанции
+  if (distance > selectedShell.effectiveRange) {
+    confidence -= 20;
+    reason += ' [ВНИМАНИЕ: цель за пределами эффективной дальности]';
+    effectiveness -= 30;
+  }
+  
+  // Анализ местности
+  let terrainAnalysis = '';
+  if (terrain === 'urban') {
+    terrainAnalysis = 'Городская застройка: повышенный риск рикошета для ББ, рекомендуется ОФ';
+    if (selectedShell.type === 'AP') {
+      selectedShell = SHELL_TYPES[0];
+      reason = 'Городская местность — ОФ эффективнее из-за риска рикошета';
+      confidence -= 10;
+    }
+  } else if (terrain === 'open') {
+    terrainAnalysis = 'Открытая местность: все типы снарядов эффективны';
+  } else if (terrain === 'forest') {
+    terrainAnalysis = 'Лесная местность: дымовые снаряды могут блокировать обзор';
+    if (selectedShell.type === 'SMOKE') {
+      confidence -= 30;
+      reason += ' [Дым в лесу неэффективен]';
+    }
+  }
+  
+  // Приоритет цели
+  if (target.priority === 'high') {
+    effectiveness = Math.min(100, effectiveness + 10);
+  }
+  
+  return {
+    shellType: selectedShell,
+    confidence,
+    reason,
+    terrainAnalysis,
+    effectiveness
+  };
+}
+
 export default function App() {
   const canvasRef = useRef<HTMLCanvasElement>(null);
-  const [gunPosition, setGunPosition] = useState<Point>(GUN_POSITION_DEFAULT);
+  const [gunPosition, setGunPosition] = useState<Point>({ x: 500, y: 500 });
   const [targetPosition, setTargetPosition] = useState<Point | null>(null);
+  const [targetData, setTargetData] = useState<TargetData | null>(null);
   const [isDragging, setIsDragging] = useState<'gun' | 'target' | null>(null);
   const [fireSolution, setFireSolution] = useState<FireSolution | null>(null);
+  const [selectedShell, setSelectedShell] = useState<ShellType>(SHELL_TYPES[0]);
+  const [aiRecommendation, setAiRecommendation] = useState<AIRecommendation | null>(null);
   const [showTrajectory, setShowTrajectory] = useState(true);
   const [windSpeed, setWindSpeed] = useState(0);
   const [windDirection, setWindDirection] = useState(0);
   const [firing, setFiring] = useState(false);
   const [shellPos, setShellPos] = useState<Point | null>(null);
   const [history, setHistory] = useState<Point[]>([]);
+  const [autoAim, setAutoAim] = useState(false);
+  const [manualCoords, setManualCoords] = useState({ x: '', y: '' });
+  const [targetType, setTargetType] = useState<string>('unknown');
+  const [targetArmor, setTargetArmor] = useState<number>(0);
+  const [terrain, setTerrain] = useState<string>('open');
+  const [aiEnabled, setAiEnabled] = useState(true);
   const animFrameRef = useRef<number>(0);
 
-  // Расчёт решения при изменении позиций
+  // Автонаводка по координатам
+  const applyManualCoords = () => {
+    const x = parseInt(manualCoords.x);
+    const y = parseInt(manualCoords.y);
+    if (!isNaN(x) && !isNaN(y) && x >= 0 && x <= MAP_SIZE && y >= 0 && y <= MAP_SIZE) {
+      const newPos = { x, y };
+      setTargetPosition(newPos);
+      setTargetData({
+        position: newPos,
+        type: targetType,
+        armor: targetArmor,
+        priority: 'medium'
+      });
+    }
+  };
+
+  // ИИ-анализ при изменении цели
+  useEffect(() => {
+    if (targetData && aiEnabled) {
+      const recommendation = analyzeTarget(targetData, gunPosition, terrain);
+      setAiRecommendation(recommendation);
+      if (autoAim) {
+        setSelectedShell(recommendation.shellType);
+      }
+    }
+  }, [targetData, gunPosition, terrain, autoAim, aiEnabled]);
+
+  // Расчёт решения
   useEffect(() => {
     if (targetPosition) {
-      const solution = calculateFireSolution(gunPosition, targetPosition);
+      const solution = calculateFireSolution(gunPosition, targetPosition, selectedShell);
       setFireSolution(solution);
     } else {
       setFireSolution(null);
     }
-  }, [gunPosition, targetPosition]);
+  }, [gunPosition, targetPosition, selectedShell]);
 
   // Отрисовка карты
   const drawMap = useCallback(() => {
@@ -93,15 +273,15 @@ export default function App() {
 
     const w = canvas.width;
     const h = canvas.height;
+    const scale = w / MAP_SIZE;
 
-    // Фон — тёмный зелёный как CRT
+    // Фон
     ctx.fillStyle = '#0a1a0a';
     ctx.fillRect(0, 0, w, h);
 
     // Сетка
     ctx.strokeStyle = '#1a3a1a';
     ctx.lineWidth = 0.5;
-    const scale = w / MAP_SIZE;
     
     for (let i = 0; i <= MAP_SIZE; i += GRID_SIZE) {
       const pos = i * scale;
@@ -138,12 +318,11 @@ export default function App() {
       ctx.stroke();
       ctx.setLineDash([]);
 
-      // Траектория снаряда
+      // Траектория
       if (showTrajectory) {
         const steps = 50;
         const dx = targetPosition.x - gunPosition.x;
         const dy = targetPosition.y - gunPosition.y;
-        const dist = fireSolution.distance;
         
         ctx.strokeStyle = '#ffaa00';
         ctx.lineWidth = 1.5;
@@ -153,7 +332,6 @@ export default function App() {
           const t = i / steps;
           const px = gunPosition.x + dx * t;
           const py = gunPosition.y + dy * t;
-          // Высота (парабола)
           const height = 4 * fireSolution.elevation * t * (1 - t) * 0.3;
           const screenX = px * scale;
           const screenY = py * scale - height * scale;
@@ -173,7 +351,7 @@ export default function App() {
       ctx.stroke();
     }
 
-    // История попаданий
+    // История
     history.forEach((pos, idx) => {
       ctx.fillStyle = `rgba(255, 100, 0, ${0.3 + idx * 0.1})`;
       ctx.beginPath();
@@ -181,14 +359,13 @@ export default function App() {
       ctx.fill();
     });
 
-    // Позиция снаряда в полёте
+    // Снаряд
     if (shellPos) {
       ctx.fillStyle = '#ffff00';
       ctx.beginPath();
       ctx.arc(shellPos.x * scale, shellPos.y * scale, 4, 0, Math.PI * 2);
       ctx.fill();
       
-      // Свечение
       ctx.fillStyle = 'rgba(255, 255, 0, 0.3)';
       ctx.beginPath();
       ctx.arc(shellPos.x * scale, shellPos.y * scale, 8, 0, Math.PI * 2);
@@ -199,19 +376,16 @@ export default function App() {
     const gunX = gunPosition.x * scale;
     const gunY = gunPosition.y * scale;
     
-    // Свечение орудия
     ctx.fillStyle = 'rgba(0, 255, 100, 0.2)';
     ctx.beginPath();
     ctx.arc(gunX, gunY, 20, 0, Math.PI * 2);
     ctx.fill();
     
-    // Корпус орудия
     ctx.fillStyle = '#00ff66';
     ctx.beginPath();
     ctx.arc(gunX, gunY, 8, 0, Math.PI * 2);
     ctx.fill();
     
-    // Ствол (направлен на цель)
     if (fireSolution) {
       const angle = (fireSolution.azimuth - 90) * Math.PI / 180;
       ctx.strokeStyle = '#00ff66';
@@ -222,7 +396,6 @@ export default function App() {
       ctx.stroke();
     }
     
-    // Подпись
     ctx.fillStyle = '#00ff66';
     ctx.font = 'bold 11px monospace';
     ctx.textAlign = 'center';
@@ -235,7 +408,6 @@ export default function App() {
       const tX = targetPosition.x * scale;
       const tY = targetPosition.y * scale;
       
-      // Перекрестие
       ctx.strokeStyle = '#ff3333';
       ctx.lineWidth = 2;
       const crossSize = 12;
@@ -248,12 +420,10 @@ export default function App() {
       ctx.lineTo(tX, tY + crossSize);
       ctx.stroke();
       
-      // Круг
       ctx.beginPath();
       ctx.arc(tX, tY, 10, 0, Math.PI * 2);
       ctx.stroke();
       
-      // Подпись
       ctx.fillStyle = '#ff3333';
       ctx.font = 'bold 11px monospace';
       ctx.textAlign = 'center';
@@ -262,12 +432,12 @@ export default function App() {
       ctx.fillText(`[${formatCoord(targetPosition.x)}, ${formatCoord(targetPosition.y)}]`, tX, tY + 24);
     }
 
-    // Рамка CRT
+    // Рамка
     ctx.strokeStyle = '#33ff33';
     ctx.lineWidth = 2;
     ctx.strokeRect(1, 1, w - 2, h - 2);
 
-    // Scanlines эффект
+    // Scanlines
     ctx.fillStyle = 'rgba(0, 0, 0, 0.03)';
     for (let i = 0; i < h; i += 2) {
       ctx.fillRect(0, i, w, 1);
@@ -279,20 +449,18 @@ export default function App() {
     drawMap();
   }, [drawMap]);
 
-  // Обработка кликов на карте
+  // Обработка кликов
   const handleCanvasClick = (e: React.MouseEvent<HTMLCanvasElement>) => {
     const canvas = canvasRef.current;
     if (!canvas) return;
     
     const rect = canvas.getBoundingClientRect();
-    const scale = canvas.width / MAP_SIZE;
-    const x = (e.clientX - rect.left) / scale * (canvas.width / rect.width);
-    const y = (e.clientY - rect.top) / scale * (canvas.height / rect.height);
+    const x = (e.clientX - rect.left) / rect.width * MAP_SIZE;
+    const y = (e.clientY - rect.top) / rect.height * MAP_SIZE;
     
-    const clickX = Math.max(0, Math.min(MAP_SIZE, x / (canvas.width / MAP_SIZE)));
-    const clickY = Math.max(0, Math.min(MAP_SIZE, y / (canvas.height / MAP_SIZE)));
+    const clickX = Math.round(x);
+    const clickY = Math.round(y);
 
-    // Проверка — клик на орудие?
     const dxGun = clickX - gunPosition.x;
     const dyGun = clickY - gunPosition.y;
     if (Math.sqrt(dxGun * dxGun + dyGun * dyGun) < 25) {
@@ -300,7 +468,6 @@ export default function App() {
       return;
     }
 
-    // Проверка — клик на цель?
     if (targetPosition) {
       const dxT = clickX - targetPosition.x;
       const dyT = clickY - targetPosition.y;
@@ -310,8 +477,14 @@ export default function App() {
       }
     }
 
-    // Новая цель
-    setTargetPosition({ x: Math.round(clickX), y: Math.round(clickY) });
+    const newPos = { x: clickX, y: clickY };
+    setTargetPosition(newPos);
+    setTargetData({
+      position: newPos,
+      type: targetType,
+      armor: targetArmor,
+      priority: 'medium'
+    });
   };
 
   const handleCanvasMouseMove = (e: React.MouseEvent<HTMLCanvasElement>) => {
@@ -320,20 +493,25 @@ export default function App() {
     if (!canvas) return;
     
     const rect = canvas.getBoundingClientRect();
-    const x = (e.clientX - rect.left) / rect.width * MAP_SIZE;
-    const y = (e.clientY - rect.top) / rect.height * MAP_SIZE;
+    const x = Math.round((e.clientX - rect.left) / rect.width * MAP_SIZE);
+    const y = Math.round((e.clientY - rect.top) / rect.height * MAP_SIZE);
     
-    const pos = { x: Math.max(0, Math.min(MAP_SIZE, Math.round(x))), y: Math.max(0, Math.min(MAP_SIZE, Math.round(y))) };
+    const pos = { x: Math.max(0, Math.min(MAP_SIZE, x)), y: Math.max(0, Math.min(MAP_SIZE, y)) };
     
     if (isDragging === 'gun') setGunPosition(pos);
-    else if (isDragging === 'target') setTargetPosition(pos);
+    else if (isDragging === 'target') {
+      setTargetPosition(pos);
+      if (targetData) {
+        setTargetData({ ...targetData, position: pos });
+      }
+    }
   };
 
   const handleCanvasMouseUp = () => {
     setIsDragging(null);
   };
 
-  // Анимация выстрела
+  // Выстрел
   const fire = () => {
     if (!targetPosition || !fireSolution) return;
     setFiring(true);
@@ -343,7 +521,6 @@ export default function App() {
     const startPos = { ...gunPosition };
     const endPos = { ...targetPosition };
     
-    // Добавляем разброс от ветра
     const windOffset = windSpeed * 0.5;
     const windRad = windDirection * Math.PI / 180;
     const impactX = endPos.x + Math.sin(windRad) * windOffset;
@@ -372,7 +549,9 @@ export default function App() {
   const clearHistory = () => setHistory([]);
   const clearTarget = () => {
     setTargetPosition(null);
+    setTargetData(null);
     setFireSolution(null);
+    setAiRecommendation(null);
     setHistory([]);
   };
 
@@ -384,11 +563,13 @@ export default function App() {
           <div className="flex items-center gap-3">
             <div className="w-3 h-3 bg-green-500 rounded-full animate-pulse"></div>
             <h1 className="text-xl font-bold text-green-300 tracking-wider">
-              ◈ MTC ART COMPUTER v2.4
+              ◈ MTC ART COMPUTER v3.0 PRO
             </h1>
           </div>
-          <div className="text-xs text-green-600">
-            СИСТЕМА НАВЕДЕНИЯ | СТАТУС: <span className="text-green-400">АКТИВНА</span>
+          <div className="text-xs text-green-600 flex gap-4">
+            <span>ИИ: <span className={aiEnabled ? 'text-green-400' : 'text-red-400'}>{aiEnabled ? 'АКТИВЕН' : 'ВЫКЛ'}</span></span>
+            <span>АВТОНАВОДКА: <span className={autoAim ? 'text-yellow-400' : 'text-green-600'}>{autoAim ? 'ВКЛ' : 'ВЫКЛ'}</span></span>
+            <span>СТАТУС: <span className="text-green-400">ГОТОВ</span></span>
           </div>
         </div>
       </header>
@@ -412,13 +593,97 @@ export default function App() {
               onMouseLeave={handleCanvasMouseUp}
             />
             <div className="text-xs text-green-700 px-2 py-1 border-t border-green-900">
-              ЛКМ — поставить метку цели | Перетаскивание — переместить орудие/цель
+              ЛКМ — метка цели | Перетаскивание — переместить
             </div>
           </div>
         </div>
 
         {/* Панель управления */}
-        <div className="lg:w-80 flex flex-col gap-4">
+        <div className="lg:w-96 flex flex-col gap-4">
+          {/* Автонаводка */}
+          <div className="border border-yellow-900 rounded bg-[#1a1a0d] p-4">
+            <h2 className="text-sm font-bold text-yellow-300 mb-3 border-b border-yellow-900 pb-2 flex justify-between">
+              <span>▸ АВТОНАВОДКА ПО КООРДИНАТАМ</span>
+              <button
+                onClick={() => setAutoAim(!autoAim)}
+                className={`px-2 py-0.5 rounded text-xs ${
+                  autoAim ? 'bg-yellow-700 text-yellow-100' : 'bg-yellow-950 text-yellow-700'
+                }`}
+              >
+                {autoAim ? 'ВКЛ' : 'ВЫКЛ'}
+              </button>
+            </h2>
+            <div className="grid grid-cols-2 gap-2 mb-2">
+              <div>
+                <label className="text-xs text-yellow-600">X:</label>
+                <input
+                  type="number"
+                  value={manualCoords.x}
+                  onChange={(e) => setManualCoords(prev => ({ ...prev, x: e.target.value }))}
+                  placeholder="0-1000"
+                  className="w-full bg-yellow-950 border border-yellow-900 rounded px-2 py-1 text-yellow-300 text-sm"
+                />
+              </div>
+              <div>
+                <label className="text-xs text-yellow-600">Y:</label>
+                <input
+                  type="number"
+                  value={manualCoords.y}
+                  onChange={(e) => setManualCoords(prev => ({ ...prev, y: e.target.value }))}
+                  placeholder="0-1000"
+                  className="w-full bg-yellow-950 border border-yellow-900 rounded px-2 py-1 text-yellow-300 text-sm"
+                />
+              </div>
+            </div>
+            <button
+              onClick={applyManualCoords}
+              className="w-full py-2 rounded bg-yellow-800 hover:bg-yellow-700 text-yellow-100 text-sm font-bold transition-all"
+            >
+              ◉ НАВЕСТИ ПО КООРДИНАТАМ
+            </button>
+          </div>
+
+          {/* ИИ-анализ */}
+          {aiEnabled && aiRecommendation && (
+            <div className="border border-cyan-900 rounded bg-[#0d1a1a] p-4">
+              <h2 className="text-sm font-bold text-cyan-300 mb-3 border-b border-cyan-900 pb-2">
+                ◈ ИИ-АНАЛИЗ ЦЕЛИ
+              </h2>
+              <div className="space-y-2 text-xs">
+                <div className="flex justify-between">
+                  <span className="text-cyan-600">РЕКОМЕНДУЕМЫЙ СНАРЯД:</span>
+                  <span className="text-cyan-300 font-bold">{aiRecommendation.shellType.name}</span>
+                </div>
+                <div className="flex justify-between">
+                  <span className="text-cyan-600">УВЕРЕННОСТЬ:</span>
+                  <span className={`font-bold ${
+                    aiRecommendation.confidence > 85 ? 'text-green-400' :
+                    aiRecommendation.confidence > 70 ? 'text-yellow-400' : 'text-red-400'
+                  }`}>{aiRecommendation.confidence}%</span>
+                </div>
+                <div className="flex justify-between">
+                  <span className="text-cyan-600">ЭФФЕКТИВНОСТЬ:</span>
+                  <span className="text-cyan-300 font-bold">{aiRecommendation.effectiveness}%</span>
+                </div>
+                <div className="mt-2 p-2 bg-cyan-950 rounded border border-cyan-900">
+                  <div className="text-cyan-400 mb-1">▸ Анализ:</div>
+                  <div className="text-cyan-300">{aiRecommendation.reason}</div>
+                </div>
+                {aiRecommendation.terrainAnalysis && (
+                  <div className="mt-2 p-2 bg-cyan-950 rounded border border-cyan-900">
+                    <div className="text-cyan-400 mb-1">▸ Местность:</div>
+                    <div className="text-cyan-300">{aiRecommendation.terrainAnalysis}</div>
+                  </div>
+                )}
+                {autoAim && (
+                  <div className="mt-2 p-2 bg-yellow-950 rounded border border-yellow-800 text-yellow-300">
+                    ⚡ АВТОНАВОДКА: снаряд выбран автоматически
+                  </div>
+                )}
+              </div>
+            </div>
+          )}
+
           {/* Решение */}
           <div className="border border-green-900 rounded bg-[#0d1a0d] p-4">
             <h2 className="text-sm font-bold text-green-300 mb-3 border-b border-green-900 pb-2">
@@ -443,84 +708,98 @@ export default function App() {
                   <span className="text-green-600 text-xs">ВРЕМЯ ПОЛЁТА:</span>
                   <span className="text-green-300 text-lg font-bold">{fireSolution.flightTime.toFixed(2)} с</span>
                 </div>
-
-                {/* Индикатор досягаемости */}
-                <div className="mt-2">
-                  <div className="text-xs text-green-600 mb-1">ДАЛЬНОСТЬ СТРЕЛЬБЫ:</div>
-                  <div className="w-full bg-green-950 rounded h-3 border border-green-900">
-                    <div 
-                      className={`h-full rounded transition-all ${
-                        fireSolution.distance > MUZZLE_VELOCITY * MUZZLE_VELOCITY / GRAVITY * 0.8
-                          ? 'bg-red-500' 
-                          : fireSolution.distance > MUZZLE_VELOCITY * MUZZLE_VELOCITY / GRAVITY * 0.5
-                          ? 'bg-yellow-500'
-                          : 'bg-green-500'
-                      }`}
-                      style={{ width: `${Math.min(100, (fireSolution.distance / (MUZZLE_VELOCITY * MUZZLE_VELOCITY / GRAVITY)) * 100)}%` }}
-                    ></div>
-                  </div>
-                  <div className="flex justify-between text-xs text-green-700 mt-1">
-                    <span>0</span>
-                    <span>{(MUZZLE_VELOCITY * MUZZLE_VELOCITY / GRAVITY).toFixed(0)}м MAX</span>
-                  </div>
-                </div>
               </div>
             ) : (
-              <div className="text-green-700 text-center py-8 text-sm">
-                ⚠ ЦЕЛЬ НЕ ОБНАРУЖЕНА
-                <br />
-                <span className="text-xs">Кликните по карте для установки метки</span>
+              <div className="text-green-700 text-center py-4 text-sm">
+                ⚠ ЦЕЛЬ НЕ УСТАНОВЛЕНА
               </div>
             )}
           </div>
 
-          {/* Позиция орудия */}
+          {/* Выбор снаряда */}
           <div className="border border-green-900 rounded bg-[#0d1a0d] p-4">
             <h2 className="text-sm font-bold text-green-300 mb-3 border-b border-green-900 pb-2">
-              ▸ ПОЗИЦИЯ ОРУДИЯ
+              ▸ ТИП СНАРЯДА
             </h2>
             <div className="grid grid-cols-2 gap-2">
+              {SHELL_TYPES.map(shell => (
+                <button
+                  key={shell.id}
+                  onClick={() => setSelectedShell(shell)}
+                  className={`p-2 rounded border text-xs transition-all ${
+                    selectedShell.id === shell.id
+                      ? 'bg-green-900 border-green-500 text-green-200'
+                      : 'bg-green-950 border-green-900 text-green-600 hover:bg-green-900'
+                  }`}
+                >
+                  <div className="font-bold">{shell.name}</div>
+                  <div className="text-[10px] mt-1">{shell.type}</div>
+                  {aiRecommendation?.shellType.id === shell.id && aiEnabled && (
+                    <div className="text-cyan-400 text-[10px] mt-1">◈ ИИ</div>
+                  )}
+                </button>
+              ))}
+            </div>
+            <div className="mt-2 p-2 bg-green-950 rounded text-xs text-green-400">
+              {selectedShell.description}
+            </div>
+          </div>
+
+          {/* Параметры цели */}
+          <div className="border border-green-900 rounded bg-[#0d1a0d] p-4">
+            <h2 className="text-sm font-bold text-green-300 mb-3 border-b border-green-900 pb-2">
+              ▸ ДАННЫЕ ЦЕЛИ
+            </h2>
+            <div className="space-y-2">
               <div>
-                <label className="text-xs text-green-600">X:</label>
+                <label className="text-xs text-green-600">ТИП ЦЕЛИ:</label>
+                <select
+                  value={targetType}
+                  onChange={(e) => {
+                    setTargetType(e.target.value);
+                    if (targetData) {
+                      setTargetData({ ...targetData, type: e.target.value });
+                    }
+                  }}
+                  className="w-full bg-green-950 border border-green-900 rounded px-2 py-1 text-green-300 text-sm"
+                >
+                  <option value="unknown">Неизвестно</option>
+                  <option value="infantry">Пехота</option>
+                  <option value="tank">Танк</option>
+                  <option value="building">Здание</option>
+                  <option value="light_vehicle">Лёгкая техника</option>
+                </select>
+              </div>
+              <div>
+                <label className="text-xs text-green-600">БРОНЯ (0-200):</label>
                 <input
                   type="number"
-                  value={gunPosition.x}
-                  onChange={(e) => setGunPosition(prev => ({ ...prev, x: Number(e.target.value) }))}
+                  value={targetArmor}
+                  onChange={(e) => {
+                    const val = Number(e.target.value);
+                    setTargetArmor(val);
+                    if (targetData) {
+                      setTargetData({ ...targetData, armor: val });
+                    }
+                  }}
+                  min="0"
+                  max="200"
                   className="w-full bg-green-950 border border-green-900 rounded px-2 py-1 text-green-300 text-sm"
                 />
               </div>
               <div>
-                <label className="text-xs text-green-600">Y:</label>
-                <input
-                  type="number"
-                  value={gunPosition.y}
-                  onChange={(e) => setGunPosition(prev => ({ ...prev, y: Number(e.target.value) }))}
+                <label className="text-xs text-green-600">МЕСТНОСТЬ:</label>
+                <select
+                  value={terrain}
+                  onChange={(e) => setTerrain(e.target.value)}
                   className="w-full bg-green-950 border border-green-900 rounded px-2 py-1 text-green-300 text-sm"
-                />
+                >
+                  <option value="open">Открытая</option>
+                  <option value="urban">Городская</option>
+                  <option value="forest">Лесная</option>
+                </select>
               </div>
             </div>
-            {targetPosition && (
-              <div className="mt-2 grid grid-cols-2 gap-2">
-                <div>
-                  <label className="text-xs text-red-400">ЦЕЛЬ X:</label>
-                  <input
-                    type="number"
-                    value={targetPosition.x}
-                    onChange={(e) => setTargetPosition(prev => prev ? { ...prev, x: Number(e.target.value) } : null)}
-                    className="w-full bg-green-950 border border-red-900 rounded px-2 py-1 text-red-300 text-sm"
-                  />
-                </div>
-                <div>
-                  <label className="text-xs text-red-400">ЦЕЛЬ Y:</label>
-                  <input
-                    type="number"
-                    value={targetPosition.y}
-                    onChange={(e) => setTargetPosition(prev => prev ? { ...prev, y: Number(e.target.value) } : null)}
-                    className="w-full bg-green-950 border border-red-900 rounded px-2 py-1 text-red-300 text-sm"
-                  />
-                </div>
-              </div>
-            )}
           </div>
 
           {/* Ветер */}
@@ -530,33 +809,31 @@ export default function App() {
             </h2>
             <div className="space-y-2">
               <div>
-                <label className="text-xs text-green-600">СКОРОСТЬ ВЕТРА (м/с):</label>
+                <label className="text-xs text-green-600">ВЕТЕР (м/с): {windSpeed}</label>
                 <input
                   type="range"
                   min="0"
                   max="30"
                   value={windSpeed}
                   onChange={(e) => setWindSpeed(Number(e.target.value))}
-                  className="w-full accent-green-500"
+                  className="w-full"
                 />
-                <span className="text-xs text-green-400">{windSpeed} м/с</span>
               </div>
               <div>
-                <label className="text-xs text-green-600">НАПРАВЛЕНИЕ ВЕТРА:</label>
+                <label className="text-xs text-green-600">НАПРАВЛЕНИЕ: {windDirection}°</label>
                 <input
                   type="range"
                   min="0"
                   max="359"
                   value={windDirection}
                   onChange={(e) => setWindDirection(Number(e.target.value))}
-                  className="w-full accent-green-500"
+                  className="w-full"
                 />
-                <span className="text-xs text-green-400">{windDirection}°</span>
               </div>
             </div>
           </div>
 
-          {/* Кнопки управления */}
+          {/* Кнопки */}
           <div className="border border-green-900 rounded bg-[#0d1a0d] p-4">
             <div className="space-y-2">
               <button
@@ -573,6 +850,16 @@ export default function App() {
               
               <div className="flex gap-2">
                 <button
+                  onClick={() => setAiEnabled(!aiEnabled)}
+                  className={`flex-1 py-2 rounded text-xs border transition-all ${
+                    aiEnabled
+                      ? 'bg-cyan-900 border-cyan-600 text-cyan-300'
+                      : 'bg-cyan-950 border-cyan-900 text-cyan-700'
+                  }`}
+                >
+                  ◈ ИИ: {aiEnabled ? 'ВКЛ' : 'ВЫКЛ'}
+                </button>
+                <button
                   onClick={() => setShowTrajectory(!showTrajectory)}
                   className={`flex-1 py-2 rounded text-xs border transition-all ${
                     showTrajectory
@@ -582,54 +869,33 @@ export default function App() {
                 >
                   {showTrajectory ? '◉ ТРАЕКТОРИЯ' : '○ ТРАЕКТОРИЯ'}
                 </button>
+              </div>
+              
+              <div className="flex gap-2">
                 <button
                   onClick={clearTarget}
                   className="flex-1 py-2 rounded text-xs border border-green-900 bg-green-950 text-green-700 hover:bg-green-900 transition-all"
                 >
                   ✕ СБРОС ЦЕЛИ
                 </button>
+                <button
+                  onClick={clearHistory}
+                  className="flex-1 py-2 rounded text-xs border border-green-900 bg-green-950 text-green-700 hover:bg-green-900 transition-all"
+                >
+                  ОЧИСТИТЬ ИСТОРИЮ
+                </button>
               </div>
-              
-              <button
-                onClick={clearHistory}
-                className="w-full py-2 rounded text-xs border border-green-900 bg-green-950 text-green-700 hover:bg-green-900 transition-all"
-              >
-                ОЧИСТИТЬ ИСТОРИЮ
-              </button>
             </div>
           </div>
-
-          {/* Быстрые данные */}
-          {fireSolution && (
-            <div className="border border-yellow-900 rounded bg-[#1a1a0d] p-4">
-              <h2 className="text-sm font-bold text-yellow-400 mb-2 border-b border-yellow-900 pb-2">
-                ⚡ КОМАНДА ОГНЯ
-              </h2>
-              <div className="text-center space-y-1">
-                <div className="text-yellow-300 text-2xl font-bold">
-                  {formatAngle(fireSolution.azimuth)}
-                </div>
-                <div className="text-yellow-500 text-xs">АЗИМУТ</div>
-                <div className="text-yellow-300 text-xl font-bold mt-2">
-                  {fireSolution.elevation.toFixed(1)}°
-                </div>
-                <div className="text-yellow-500 text-xs">УГОЛ МЕСТА</div>
-                <div className="text-yellow-300 text-lg font-bold mt-2">
-                  {fireSolution.distance.toFixed(0)}м
-                </div>
-                <div className="text-yellow-500 text-xs">ДАЛЬНОСТЬ</div>
-              </div>
-            </div>
-          )}
         </div>
       </div>
 
       {/* Footer */}
       <footer className="border-t border-green-900 bg-[#0d1a0d] px-4 py-2">
         <div className="flex justify-between items-center max-w-7xl mx-auto text-xs text-green-700">
-          <span>MTC ARTILLERY FIRE CONTROL SYSTEM</span>
-          <span>Калибр: 152мм | Боеприпас: ОФ</span>
-          <span>© ART-COMPUTER 2024</span>
+          <span>MTC ARTILLERY FIRE CONTROL SYSTEM v3.0</span>
+          <span>ИИ-МОДУЛЬ АКТИВЕН | АВТОНАВОДКА</span>
+          <span>© ART-COMPUTER PRO 2024</span>
         </div>
       </footer>
     </div>
